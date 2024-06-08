@@ -1,77 +1,90 @@
-import socket
-import threading
-import base64
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.primitives import padding
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <pthread.h>
 
-# Server configuration
-HOST = '127.0.0.1'
-PORT = 5000
-BUFFER_SIZE = 1024
+#define BUFFER_SIZE 1024
+#define SERVER_PORT 5000
+#define MAX_NAME_LENGTH 32
 
-# Function to encrypt a message using AES
-def encrypt_message(message, key):
-    iv = secrets.token_bytes(16)  # Generate a random initialization vector
-    cipher = Cipher(algorithms.AES(key), modes.CBC(iv))
-    encryptor = cipher.encryptor()
-    padder = padding.PKCS7(128).padder()
-    padded_data = padder.update(message.encode()) + padder.finalize()
-    encrypted_data = encryptor.update(padded_data) + encryptor.finalize()
-    return base64.b64encode(iv + encrypted_data)
+void *receive_messages(void *socket_desc) {
+    int client_socket = *(int *)socket_desc;
+    char buffer[BUFFER_SIZE];
 
-# Function to decrypt a message using AES
-def decrypt_message(encrypted_message, key):
-    encrypted_data = base64.b64decode(encrypted_message)
-    iv = encrypted_data[:16]
-    cipher = Cipher(algorithms.AES(key), modes.CBC(iv))
-    decryptor = cipher.decryptor()
-    padded_data = decryptor.update(encrypted_data[16:]) + decryptor.finalize()
-    unpadder = padding.PKCS7(128).unpadder()
-    decrypted_data = unpadder.update(padded_data) + unpadder.finalize()
-    return decrypted_data.decode()
+    while (1) {
+        memset(buffer, 0, BUFFER_SIZE);
 
-# Function to receive messages from the server
-def receive_messages(client_socket, key):
-    while True:
-        try:
-            # Receive encrypted message from the server
-            encrypted_message = client_socket.recv(BUFFER_SIZE)
-            if not encrypted_message:
-                break
+        if (recv(client_socket, buffer, BUFFER_SIZE, 0) > 0) {
+            printf("\r%s\n> ", buffer);
+            fflush(stdout);
+        }
+    }
 
-            # Decrypt the message
-            decrypted_message = decrypt_message(encrypted_message, key)
-            print(decrypted_message)
+    return NULL;
+}
 
-        except Exception as e:
-            print(f'Error: {e}')
-            break
+int main(int argc, char *argv[]) {
+    int client_socket;
+    struct sockaddr_in server_address;
+    char buffer[BUFFER_SIZE];
+    char name[MAX_NAME_LENGTH];
+    pthread_t receive_thread;
 
-# Function to send messages to the server
-def send_messages(client_socket, key):
-    while True:
-        message = input()
+    // Create socket
+    client_socket = socket(AF_INET, SOCK_STREAM, 0);
 
-        # Encrypt the message
-        encrypted_message = encrypt_message(message, key)
+    if (client_socket < 0) {
+        perror("socket");
+        exit(1);
+    }
 
-        try:
-            # Send the encrypted message to the server
-            client_socket.send(encrypted_message)
-        except Exception as e:
-            print(f'Error: {e}')
-            break
+    // Set up server address
+    memset(&server_address, 0, sizeof(server_address));
+    server_address.sin_family = AF_INET;
+    server_address.sin_addr.s_addr = inet_addr("127.0.0.1");
+    server_address.sin_port = htons(SERVER_PORT);
 
-# Connect to the server
-client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-client_socket.connect((HOST, PORT))
+    // Connect to the server
+    if (connect(client_socket, (struct sockaddr *)&server_address, sizeof(server_address)) < 0) {
+        perror("connect");
+        exit(1);
+    }
 
-# Receive the encryption key from the server
-key = client_socket.recv(32)
+    // Get client name
+    printf("Enter your name: ");
+    fgets(name, MAX_NAME_LENGTH, stdin);
+    name[strcspn(name, "\n")] = '\0';
 
-# Start threads for sending and receiving messages
-receive_thread = threading.Thread(target=receive_messages, args=(client_socket, key))
-send_thread = threading.Thread(target=send_messages, args=(client_socket, key))
+    // Send client name to the server
+    if (send(client_socket, name, strlen(name), 0) < 0) {
+        perror("send");
+        exit(1);
+    }
 
-receive_thread.start()
-send_thread.start()
+    // Create a thread to receive messages from the server
+    if (pthread_create(&receive_thread, NULL, receive_messages, (void *)&client_socket) < 0) {
+        perror("pthread_create");
+        exit(1);
+    }
+
+    while (1) {
+        memset(buffer, 0, BUFFER_SIZE);
+        printf("> ");
+        fgets(buffer, BUFFER_SIZE, stdin);
+        buffer[strcspn(buffer, "\n")] = '\0';
+
+        if (strcmp(buffer, "quit") == 0) {
+            break;
+        }
+
+        send(client_socket, buffer, strlen(buffer), 0);
+    }
+
+    close(client_socket);
+    return 0;
+}

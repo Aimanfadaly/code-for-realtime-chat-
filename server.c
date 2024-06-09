@@ -10,9 +10,8 @@
 
 #define BUFFER_SIZE 1024
 #define SERVER_PORT 5000
-#define MAX_CLIENTS 10
 #define MAX_NAME_LENGTH 32
-#define SHIFT 3 // Shift value for Caesar cipher
+#define MAX_CLIENTS 10
 
 typedef struct {
     int socket;
@@ -43,25 +42,16 @@ void broadcast_message(char *message, int sender_socket) {
 void *handle_client(void *client_ptr) {
     client_t *client = (client_t *)client_ptr;
     char buffer[BUFFER_SIZE];
-    char decrypted_buffer[BUFFER_SIZE];
     int nbytes;
 
     while ((nbytes = recv(client->socket, buffer, BUFFER_SIZE, 0)) > 0) {
         buffer[nbytes] = '\0';
 
-        // Decrypt the received message for printing on the server terminal
-        strcpy(decrypted_buffer, buffer);
-        for (int i = 0; i < nbytes; i++) {
-            decrypted_buffer[i] = (decrypted_buffer[i] - SHIFT + 26) % 26 + 'A';
-        }
-
         char message[BUFFER_SIZE + MAX_NAME_LENGTH];
-        sprintf(message, "%s: %s", client->name, decrypted_buffer);
+        sprintf(message, "%s: %s", client->name, buffer);
         printf("%s\n", message);
 
-        char encrypted_message[BUFFER_SIZE + MAX_NAME_LENGTH];
-        sprintf(encrypted_message, "%s: %s", client->name, buffer);
-        broadcast_message(encrypted_message, client->socket);
+        broadcast_message(message, client->socket);
     }
 
     close(client->socket);
@@ -96,7 +86,7 @@ int main() {
     // Set up server address
     memset(&server_address, 0, sizeof(server_address));
     server_address.sin_family = AF_INET;
-    server_address.sin_addr.s_addr = INADDR_ANY;
+    server_address.sin_addr.s_addr = INADDR_ANY; // Listen on all available network interfaces
     server_address.sin_port = htons(SERVER_PORT);
 
     // Bind socket to address

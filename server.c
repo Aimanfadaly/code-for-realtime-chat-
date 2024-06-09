@@ -6,7 +6,6 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
-#pragma comment(lib, "ws2_32.lib")
 #else
 #include <unistd.h>
 #include <sys/types.h>
@@ -18,79 +17,43 @@
 
 #define BUFFER_SIZE 1024
 #define SERVER_PORT 5000
-#define MAX_CLIENTS 10
 #define MAX_NAME_LENGTH 32
-#define SHIFT 3 // Shift value for Caesar cipher
 
 #ifdef _WIN32
 typedef SOCKET SocketType;
+typedef HANDLE pthread_t; // Define pthread_t as HANDLE for Windows
 #else
 typedef int SocketType;
 #endif
 
-typedef struct {
-    SocketType socket;
-    struct sockaddr_in address;
-    int addr_len;
-    char name[MAX_NAME_LENGTH];
-} client_t;
-
-client_t *clients[MAX_CLIENTS];
-pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
-
-void broadcast_message(char *message, int sender_socket) {
-    pthread_mutex_lock(&clients_mutex);
-
-    for (int i = 0; i < MAX_CLIENTS; i++) {
-        if (clients[i]) {
-            if (clients[i]->socket != sender_socket) {
-                if (send(clients[i]->socket, message, strlen(message), 0) < 0) {
-                    perror("send");
-                }
-            }
-        }
-    }
-
-    pthread_mutex_unlock(&clients_mutex);
+#ifdef _WIN32
+// Wrapper function for creating threads on Windows
+int pthread_create_win(pthread_t *thread, const void *unused, void *(*start_routine)(void *), void *arg) {
+    DWORD threadId;
+    *thread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)start_routine, arg, 0, &threadId);
+    return (*thread != NULL) ? 0 : 1;
 }
+#define pthread_create pthread_create_win
+#define close closesocket // Use closesocket() instead of close() on Windows
+#endif
 
-void *handle_client(void *client_ptr) {
-    client_t *client = (client_t *)client_ptr;
+void *receive_messages(void *socket_desc) {
+    SocketType client_socket = *(SocketType *)socket_desc;
     char buffer[BUFFER_SIZE];
-    char decrypted_buffer[BUFFER_SIZE];
-    int nbytes;
 
-    while ((nbytes = recv(client->socket, buffer, BUFFER_SIZE, 0)) > 0) {
-        buffer[nbytes] = '\0';
+    while (1) {
+        memset(buffer, 0, BUFFER_SIZE);
 
-        // Decrypt the received message for printing on the server terminal
-        strcpy(decrypted_buffer, buffer);
-        for (int i = 0; i < nbytes; i++) {
-            decrypted_buffer[i] = (decrypted_buffer[i] - SHIFT + 26) % 26 + 'A';
+        if (recv(client_socket, buffer, BUFFER_SIZE, 0) > 0) {
+            printf("\r%s\n> ", buffer);
+            fflush(stdout);
         }
 
-        char message[BUFFER_SIZE + MAX_NAME_LENGTH];
-        sprintf(message, "%s: %s", client->name, decrypted_buffer);
-        printf("%s\n", message);
-
-        char encrypted_message[BUFFER_SIZE + MAX_NAME_LENGTH];
-        sprintf(encrypted_message, "%s: %s", client->name, buffer);
-        broadcast_message(encrypted_message, client->socket);
+#ifdef _WIN32
+        Sleep(100); // Sleep for 100 milliseconds to prevent high CPU usage on Windows
+#endif
     }
 
-    close(client->socket);
-    pthread_mutex_lock(&clients_mutex);
-
-    for (int i = 0; i < MAX_CLIENTS; i++) {
-        if (clients[i] == client) {
-            clients[i] = NULL;
-            printf("%s has disconnected from the server\n", client->name);
-            break;
-        }
-    }
-
-    pthread_mutex_unlock(&clients_mutex);
-    free(client);
     return NULL;
 }
 
@@ -103,14 +66,16 @@ int main() {
     }
 #endif
 
-    SocketType server_socket, new_socket;
-    struct sockaddr_in server_address, client_address;
-    socklen_t client_len = sizeof(client_address);
-    pthread_t tid;
+    SocketType client_socket;
+    struct sockaddr_in server_address;
+    char buffer[BUFFER_SIZE];
+    char name[MAX_NAME_LENGTH];
+    pthread_t receive_thread;
 
-    // Create server socket
-    server_socket = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_socket < 0) {
+    // Create socket
+    client_socket = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (client_socket == -1) {
         perror("socket");
 #ifdef _WIN32
         WSACleanup();
@@ -121,70 +86,57 @@ int main() {
     // Set up server address
     memset(&server_address, 0, sizeof(server_address));
     server_address.sin_family = AF_INET;
-    server_address.sin_addr.s_addr = INADDR_ANY;
+    server_address.sin_addr.s_addr = inet_addr("127.0.0.1");
     server_address.sin_port = htons(SERVER_PORT);
 
-    // Bind socket to address
-    if (bind(server_socket, (struct sockaddr *)&server_address, sizeof(server_address)) < 0) {
-        perror("bind");
-        close(server_socket);
+    // Connect to the server
+    if (connect(client_socket, (struct sockaddr *)&server_address, sizeof(server_address)) < 0) {
+        perror("connect");
 #ifdef _WIN32
         WSACleanup();
 #endif
         exit(EXIT_FAILURE);
     }
 
-    // Listen for connections
-    if (listen(server_socket, MAX_CLIENTS) < 0) {
-        perror("listen");
-        close(server_socket);
+    // Get client name
+    printf("Enter your name: ");
+    fgets(name, MAX_NAME_LENGTH, stdin);
+    name[strcspn(name, "\n")] = '\0';
+
+    // Send client name to the server
+    if (send(client_socket, name, strlen(name), 0) < 0) {
+        perror("send");
+        close(client_socket);
 #ifdef _WIN32
         WSACleanup();
 #endif
         exit(EXIT_FAILURE);
     }
 
-    printf("Server is listening on port %d\n", SERVER_PORT);
+    // Create a thread to receive messages from the server
+    if (pthread_create(&receive_thread, NULL, receive_messages, (void *)&client_socket) != 0) {
+        perror("pthread_create");
+        close(client_socket);
+#ifdef _WIN32
+        WSACleanup();
+#endif
+        exit(EXIT_FAILURE);
+    }
 
     while (1) {
-        new_socket = accept(server_socket, (struct sockaddr *)&client_address, &client_len);
-        if (new_socket < 0) {
-            perror("accept");
-            continue;
+        memset(buffer, 0, BUFFER_SIZE);
+        printf("> ");
+        fgets(buffer, BUFFER_SIZE, stdin);
+        buffer[strcspn(buffer, "\n")] = '\0';
+
+        if (strcmp(buffer, "quit") == 0) {
+            break;
         }
 
-        // Create client structure
-        client_t *client = (client_t *)malloc(sizeof(client_t));
-        client->socket = new_socket;
-        client->address = client_address;
-        client->addr_len = client_len;
-
-        // Receive client name
-        char name[MAX_NAME_LENGTH];
-        if (recv(new_socket, name, MAX_NAME_LENGTH, 0) <= 0) {
-            perror("recv");
-            continue;
-        }
-        strcpy(client->name, name);
-
-        // Print client connection message
-        printf("%s has connected to the server\n", client->name);
-
-        // Add client to the client list
-        pthread_mutex_lock(&clients_mutex);
-        for (int i = 0; i < MAX_CLIENTS; i++) {
-            if (!clients[i]) {
-                clients[i] = client;
-                break;
-            }
-        }
-        pthread_mutex_unlock(&clients_mutex);
-
-        // Create a thread to handle the client
-        pthread_create(&tid, NULL, handle_client, (void *)client);
+        send(client_socket, buffer, strlen(buffer), 0);
     }
 
-    close(server_socket);
+    close(client_socket);
 #ifdef _WIN32
     WSACleanup();
 #endif

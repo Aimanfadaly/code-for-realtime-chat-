@@ -1,12 +1,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#pragma comment(lib, "ws2_32.lib")
+#else
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#endif
 
 #define BUFFER_SIZE 1024
 #define SERVER_PORT 5000
@@ -14,8 +22,14 @@
 #define MAX_NAME_LENGTH 32
 #define SHIFT 3 // Shift value for Caesar cipher
 
+#ifdef _WIN32
+typedef SOCKET SocketType;
+#else
+typedef int SocketType;
+#endif
+
 typedef struct {
-    int socket;
+    SocketType socket;
     struct sockaddr_in address;
     int addr_len;
     char name[MAX_NAME_LENGTH];
@@ -81,7 +95,15 @@ void *handle_client(void *client_ptr) {
 }
 
 int main() {
-    int server_socket, new_socket;
+#ifdef _WIN32
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        perror("WSAStartup");
+        exit(EXIT_FAILURE);
+    }
+#endif
+
+    SocketType server_socket, new_socket;
     struct sockaddr_in server_address, client_address;
     socklen_t client_len = sizeof(client_address);
     pthread_t tid;
@@ -90,7 +112,10 @@ int main() {
     server_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (server_socket < 0) {
         perror("socket");
-        exit(1);
+#ifdef _WIN32
+        WSACleanup();
+#endif
+        exit(EXIT_FAILURE);
     }
 
     // Set up server address
@@ -103,14 +128,20 @@ int main() {
     if (bind(server_socket, (struct sockaddr *)&server_address, sizeof(server_address)) < 0) {
         perror("bind");
         close(server_socket);
-        exit(1);
+#ifdef _WIN32
+        WSACleanup();
+#endif
+        exit(EXIT_FAILURE);
     }
 
     // Listen for connections
     if (listen(server_socket, MAX_CLIENTS) < 0) {
         perror("listen");
         close(server_socket);
-        exit(1);
+#ifdef _WIN32
+        WSACleanup();
+#endif
+        exit(EXIT_FAILURE);
     }
 
     printf("Server is listening on port %d\n", SERVER_PORT);
@@ -154,5 +185,8 @@ int main() {
     }
 
     close(server_socket);
+#ifdef _WIN32
+    WSACleanup();
+#endif
     return 0;
 }

@@ -27,16 +27,16 @@ typedef int SocketType;
 #endif
 
 void *receive_messages(void *socket_desc) {
-    SocketType client_socket = *(SocketType *)socket_desc;
+    SocketType clientSocket = *(SocketType *)socket_desc;
     char buffer[BUFFER_SIZE];
 
     while (1) {
         memset(buffer, 0, BUFFER_SIZE);
 
 #ifdef _WIN32
-        if (recv(client_socket, buffer, BUFFER_SIZE, 0) > 0) {
+        if (recv(clientSocket, buffer, BUFFER_SIZE, 0) > 0) {
 #else
-        if (recv(client_socket, buffer, BUFFER_SIZE, MSG_DONTWAIT) > 0) {
+        if (recv(clientSocket, buffer, BUFFER_SIZE, MSG_DONTWAIT) > 0) {
 #endif
             printf("\r%s\n> ", buffer);
             fflush(stdout);
@@ -58,16 +58,16 @@ int main() {
     }
 #endif
 
-    SocketType client_socket;
-    struct sockaddr_in server_address;
+    SocketType clientSocket;
+    struct sockaddr_in serverAddr;
     char buffer[BUFFER_SIZE];
-    char name[MAX_NAME_LENGTH];
-    pthread_t receive_thread;
+    char clientName[MAX_NAME_LENGTH];
+    pthread_t recvThread;
 
     // Create socket
-    client_socket = socket(AF_INET, SOCK_STREAM, 0);
+    clientSocket = socket(AF_INET, SOCK_STREAM, 0);
 
-    if (client_socket == -1) {
+    if (clientSocket == -1) {
         perror("socket");
 #ifdef _WIN32
         WSACleanup();
@@ -76,27 +76,27 @@ int main() {
     }
 
     // Set up server address
-    memset(&server_address, 0, sizeof(server_address));
-    server_address.sin_family = AF_INET;
-    server_address.sin_addr.s_addr = inet_addr("SERVER_IP_ADDRESS"); // Replace with server IP address
-    server_address.sin_port = htons(SERVER_PORT);
+    memset(&serverAddr, 0, sizeof(serverAddr));
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_addr.s_addr = inet_addr("SERVER_IP_ADDRESS"); // Replace with server IP address
+    serverAddr.sin_port = htons(SERVER_PORT);
 
     // Connect to the server
-    if (connect(client_socket, (struct sockaddr *)&server_address, sizeof(server_address)) < 0) {
+    if (connect(clientSocket, (struct sockaddr *)&serverAddr, sizeof(serverAddr)) < 0) {
         perror("connect");
-        close(client_socket);
+        close(clientSocket);
         exit(EXIT_FAILURE);
     }
 
     // Get client name
     printf("Enter your name: ");
-    fgets(name, MAX_NAME_LENGTH, stdin);
-    name[strcspn(name, "\n")] = '\0';
+    fgets(clientName, MAX_NAME_LENGTH, stdin);
+    clientName[strcspn(clientName, "\n")] = '\0';
 
     // Send client name to the server
-    if (send(client_socket, name, strlen(name), 0) < 0) {
+    if (send(clientSocket, clientName, strlen(clientName), 0) < 0) {
         perror("send");
-        close(client_socket);
+        close(clientSocket);
 #ifdef _WIN32
         WSACleanup();
 #endif
@@ -104,9 +104,9 @@ int main() {
     }
 
     // Create a thread to receive messages from the server
-    if (pthread_create(&receive_thread, NULL, receive_messages, (void *)&client_socket) < 0) {
+    if (pthread_create(&recvThread, NULL, receive_messages, (void *)&clientSocket) < 0) {
         perror("pthread_create");
-        close(client_socket);
+        close(clientSocket);
 #ifdef _WIN32
         WSACleanup();
 #endif
@@ -123,10 +123,10 @@ int main() {
             break;
         }
 
-        send(client_socket, buffer, strlen(buffer), 0);
+        send(clientSocket, buffer, strlen(buffer), 0);
     }
 
-    close(client_socket);
+    close(clientSocket);
 #ifdef _WIN32
     WSACleanup();
 #endif

@@ -1,148 +1,55 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <pthread.h>
+import socket
+import select
 
-#define BUFFER_SIZE 1024
-#define SERVER_PORT 5000
-#define MAX_NAME_LENGTH 32
-#define MAX_CLIENTS 10
+HEADER_LENGTH = 10
+IP = "127.0.0.1"
+PORT = 1234
 
-typedef struct {
-    int socket;
-    struct sockaddr_in address;
-    int addr_len;
-    char name[MAX_NAME_LENGTH];
-} client_t;
+server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+server_socket.bind((IP, PORT))
+server_socket.listen(4)
 
-client_t *clients[MAX_CLIENTS];
-pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
+sockets_list = [server_socket]
+clients = {}
 
-void broadcast_message(char *message, int sender_socket) {
-    pthread_mutex_lock(&clients_mutex);
+print(f'Listening for connections on {IP}:{PORT}...')
 
-    for (int i = 0; i < MAX_CLIENTS; i++) {
-        if (clients[i]) {
-            if (clients[i]->socket != sender_socket) {
-                if (send(clients[i]->socket, message, strlen(message), 0) < 0) {
-                    perror("send");
-                }
-            }
-        }
-    }
+def receive_message(client_socket):
+    try:
+        message_header = client_socket.recv(HEADER_LENGTH)
+        if not len(message_header):
+            return False
+        message_length = int(message_header.decode('utf-8').strip())
+        return {'header': message_header, 'data': client_socket.recv(message_length)}
+    except:
+        return False
 
-    pthread_mutex_unlock(&clients_mutex);
-}
+while True:
+    read_sockets, _, exception_sockets = select.select(sockets_list, [], sockets_list)
 
-void *handle_client(void *client_ptr) {
-    client_t *client = (client_t *)client_ptr;
-    char buffer[BUFFER_SIZE];
-    int nbytes;
+    for notified_socket in read_sockets:
+        if notified_socket == server_socket:
+            client_socket, client_address = server_socket.accept()
+            user = receive_message(client_socket)
+            if user is False:
+                continue
+            sockets_list.append(client_socket)
+            clients[client_socket] = user
+            print(f"Accepted new connection from {client_address[0]}:{client_address[1]} username:{user['data'].decode('utf-8')}")
+        else:
+            message = receive_message(notified_socket)
+            if message is False:
+                print(f"Closed connection from {clients[notified_socket]['data'].decode('utf-8')}")
+                sockets_list.remove(notified_socket)
+                del clients[notified_socket]
+                continue
+            user = clients[notified_socket]
+            print(f"Received message from {user['data'].decode('utf-8')}: {message['data'].decode('utf-8')}")
+            for client_socket in clients:
+                if client_socket != notified_socket:
+                    client_socket.send(user['header'] + user['data'] + message['header'] + message['data'])
 
-    while ((nbytes = recv(client->socket, buffer, BUFFER_SIZE, 0)) > 0) {
-        buffer[nbytes] = '\0';
-
-        char message[BUFFER_SIZE + MAX_NAME_LENGTH];
-        sprintf(message, "%s: %s", client->name, buffer);
-        printf("%s\n", message);
-
-        broadcast_message(message, client->socket);
-    }
-
-    close(client->socket);
-    pthread_mutex_lock(&clients_mutex);
-
-    for (int i = 0; i < MAX_CLIENTS; i++) {
-        if (clients[i] == client) {
-            clients[i] = NULL;
-            printf("%s has disconnected from the server\n", client->name);
-            break;
-        }
-    }
-
-    pthread_mutex_unlock(&clients_mutex);
-    free(client);
-    return NULL;
-}
-
-int main() {
-    int server_socket, new_socket;
-    struct sockaddr_in server_address, client_address;
-    socklen_t client_len = sizeof(client_address);
-    pthread_t tid;
-
-    // Create server socket
-    server_socket = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_socket < 0) {
-        perror("socket");
-        exit(1);
-    }
-
-    // Set up server address
-    memset(&server_address, 0, sizeof(server_address));
-    server_address.sin_family = AF_INET;
-    server_address.sin_addr.s_addr = INADDR_ANY; // Listen on all available network interfaces
-    server_address.sin_port = htons(SERVER_PORT);
-
-    // Bind socket to address
-    if (bind(server_socket, (struct sockaddr *)&server_address, sizeof(server_address)) < 0) {
-        perror("bind");
-        close(server_socket);
-        exit(1);
-    }
-
-    // Listen for connections
-    if (listen(server_socket, MAX_CLIENTS) < 0) {
-        perror("listen");
-        close(server_socket);
-        exit(1);
-    }
-
-    printf("Server is listening on port %d\n", SERVER_PORT);
-
-    while (1) {
-        new_socket = accept(server_socket, (struct sockaddr *)&client_address, &client_len);
-        if (new_socket < 0) {
-            perror("accept");
-            continue;
-        }
-
-        // Create client structure
-        client_t *client = (client_t *)malloc(sizeof(client_t));
-        client->socket = new_socket;
-        client->address = client_address;
-        client->addr_len = client_len;
-
-        // Receive client name
-        char name[MAX_NAME_LENGTH];
-        if (recv(new_socket, name, MAX_NAME_LENGTH, 0) <= 0) {
-            perror("recv");
-            continue;
-        }
-        strcpy(client->name, name);
-
-        // Print client connection message
-        printf("%s has connected to the server\n", client->name);
-
-        // Add client to the client list
-        pthread_mutex_lock(&clients_mutex);
-        for (int i = 0; i < MAX_CLIENTS; i++) {
-            if (!clients[i]) {
-                clients[i] = client;
-                break;
-            }
-        }
-        pthread_mutex_unlock(&clients_mutex);
-
-        // Create a thread to handle the client
-        pthread_create(&tid, NULL, handle_client, (void *)client);
-    }
-
-    close(server_socket);
-    return 0;
-}
+    for notified_socket in exception_sockets:
+        sockets_list.remove(notified_socket)
+        del clients[notified_socket]

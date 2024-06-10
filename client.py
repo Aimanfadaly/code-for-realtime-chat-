@@ -37,5 +37,5 @@ def main():
 
     client_socket.close()
 
-if _name_ == "_main_":
+if __name__ == "__main__":
     main()

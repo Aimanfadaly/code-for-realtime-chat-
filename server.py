@@ -1,55 +1,66 @@
 import socket
-import select
+import threading
 
-HEADER_LENGTH = 10
-IP = "127.0.0.1"
-PORT = 1234
+SERVER_PORT = 8000
+BUFFER_SIZE = 1024
+MAX_NAME_LENGTH = 32
+MAX_CLIENTS = 10
+SHIFT = 3  # Shift value for Caesar cipher
 
-server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-server_socket.bind((IP, PORT))
-server_socket.listen(4)
+clients = []
+clients_lock = threading.Lock()
 
-sockets_list = [server_socket]
-clients = {}
-
-print(f'Listening for connections on {IP}:{PORT}...')
-
-def receive_message(client_socket):
-    try:
-        message_header = client_socket.recv(HEADER_LENGTH)
-        if not len(message_header):
-            return False
-        message_length = int(message_header.decode('utf-8').strip())
-        return {'header': message_header, 'data': client_socket.recv(message_length)}
-    except:
-        return False
-
-while True:
-    read_sockets, _, exception_sockets = select.select(sockets_list, [], sockets_list)
-
-    for notified_socket in read_sockets:
-        if notified_socket == server_socket:
-            client_socket, client_address = server_socket.accept()
-            user = receive_message(client_socket)
-            if user is False:
-                continue
-            sockets_list.append(client_socket)
-            clients[client_socket] = user
-            print(f"Accepted new connection from {client_address[0]}:{client_address[1]} username:{user['data'].decode('utf-8')}")
+def caesar_cipher(text, shift):
+    result = ""
+    for char in text:
+        if char.isalpha():
+            shifted = ord(char) - shift
+            if char.islower():
+                result += chr((shifted - ord('a')) % 26 + ord('a'))
+            else:
+                result += chr((shifted - ord('A')) % 26 + ord('A'))
         else:
-            message = receive_message(notified_socket)
-            if message is False:
-                print(f"Closed connection from {clients[notified_socket]['data'].decode('utf-8')}")
-                sockets_list.remove(notified_socket)
-                del clients[notified_socket]
-                continue
-            user = clients[notified_socket]
-            print(f"Received message from {user['data'].decode('utf-8')}: {message['data'].decode('utf-8')}")
-            for client_socket in clients:
-                if client_socket != notified_socket:
-                    client_socket.send(user['header'] + user['data'] + message['header'] + message['data'])
+            result += char
+    return result
 
-    for notified_socket in exception_sockets:
-        sockets_list.remove(notified_socket)
-        del clients[notified_socket]
+def handle_client(client_socket, client_address):
+    name = client_socket.recv(MAX_NAME_LENGTH).decode().strip()
+    print(f"Welcome {name} to our awesome server.")
+
+    with clients_lock:
+        clients.append((client_socket, name))
+
+    while True:
+        try:
+            message = client_socket.recv(BUFFER_SIZE).decode()
+            if not message:
+                break
+            decrypted_message = caesar_cipher(message, SHIFT)
+            print(f"{name}: {decrypted_message}")
+
+            with clients_lock:
+                for c in clients:
+                    if c[0] != client_socket:
+                        c[0].send(f"{name}: {message}".encode())
+        except Exception as e:
+            print(f"Error handling client: {e}")
+            break
+
+    print(f"Bye bye {name} see you again.")
+    with clients_lock:
+        clients.remove((client_socket, name))
+    client_socket.close()
+
+def main():
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.bind(('0.0.0.0', SERVER_PORT))
+    server_socket.listen(MAX_CLIENTS)
+    print(f"Awesome server is up. Kindly ask the client to enter awesome for the password")
+
+    while True:
+        client_socket, client_address = server_socket.accept()
+        client_thread = threading.Thread(target=handle_client, args=(client_socket, client_address))
+        client_thread.start()
+
+if _name_ == "_main_":
+    main()
